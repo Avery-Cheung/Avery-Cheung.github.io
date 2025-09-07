@@ -1,7 +1,7 @@
 @echo off
-:: One-click upload script - add, commit, push
+:: 一键上传脚本 - add, commit, push
 
-:: Set commit message, or uncomment next line to input manually
+:: 设置提交信息，或者取消下一行注释以手动输入
 set COMMIT_MSG=Update website
 :: set /p COMMIT_MSG=Enter commit message: 
 

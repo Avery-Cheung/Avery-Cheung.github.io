@@ -1,22 +1,23 @@
 @echo off
-:: 一键上传脚本 - 自动 add, commit, push
+:: One-click upload script - add, commit, push
 
-:: 设置提交说明
-set COMMIT_MSG=更新网站
+:: Set commit message, or uncomment next line to input manually
+set COMMIT_MSG=Update website
+:: set /p COMMIT_MSG=Enter commit message: 
 
-echo 当前仓库状态：
+echo Current repository status:
 git status
 echo ------------------------
 
-echo 暂存修改...
+echo Staging changes...
 git add .
 
-echo 提交修改...
+echo Committing changes...
 git commit -m "%COMMIT_MSG%"
 
-echo 上传到 GitHub...
+echo Pushing to GitHub...
 git push origin main
 
 echo ------------------------
-echo 上传完成！
+echo Upload completed!
 pause

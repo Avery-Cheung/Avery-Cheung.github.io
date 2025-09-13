@@ -20,6 +20,21 @@ class Dice:
         return [random.randint(min_value, sides) for _ in range(times)]
 
 def interactive_roll(sides: int, player, hint: str = None, min_value=1):
+    # 检查玩家是否有预设的骰子值
+    if hasattr(player, '_next_roll_value'):
+        preset_value = getattr(player, '_next_roll_value')
+        # 确保预设值在有效范围内
+        if min_value <= preset_value <= sides:
+            # 使用预设值并清除属性
+            delattr(player, '_next_roll_value')
+            print(f"骰子 [{min_value}-{sides}] 闪现: {preset_value}    ")
+            print(f"\n最终判定 → {preset_value} (预设值)")
+            return preset_value
+        else:
+            # 预设值无效，清除属性并继续正常流程
+            delattr(player, '_next_roll_value')
+            print(f"预设值 {preset_value} 超出范围 [{min_value}-{sides}]，将使用随机值")
+
     # 如果不是交互式终端（Colab/iPad Notebook 会返回 False），就直接返回随机数（健壮处理）
     if not INTERACTIVE_DICE or not sys.stdin or not sys.stdin.isatty():
         return random.randint(min_value, sides)
@@ -64,13 +79,14 @@ class Card:
         self.outcomes = outcomes or {}
         self.stable_effect = stable_effect
         self.rarity = int(max(0, min(100, rarity)))  # 0-100，越大越稀有
+        self.min_value = min_value  # 保存min_value参数
 
     def play(self, user, target):
             
         # 获取原始结果
         result = None
         if self.dice_sides:
-            result = self._resolve_outcome(user, target, self.outcomes, self.dice_sides)
+            result = self._resolve_outcome(user, target, self.outcomes, self.dice_sides, self.min_value)
         elif self.stable_effect:
             result = self.stable_effect(user, target)
         else:
@@ -102,7 +118,8 @@ class Card:
             dice_sides=self.dice_sides,
             outcomes=self.outcomes,
             stable_effect=self.stable_effect,
-            rarity=self.rarity
+            rarity=self.rarity,
+            min_value=self.min_value
         )
 
 class Player:
@@ -127,7 +144,11 @@ class Player:
     @property
     def actions(self):
         # 行动力 = 基础行动力 - 负行动力
-        return max(0, self._base_actions - getattr(self, "_negative_action_points", 0))
+        return self._base_actions - getattr(self, "_negative_action_points", 0)
+
+    def display_actions(self):
+        # 用于显示的行动力，如果是负数则显示为0
+        return max(0, self.actions())
 
     def draw(self, n=1):
         for _ in range(n):
@@ -233,7 +254,9 @@ def mentos_god(user, target, roll):
     results = []
     
     # 第一次判定：回SAN
-    if 1 <= roll <= 4:
+    if 1 <= roll <= 2:
+        amount = 0  # 不恢复SAN
+    elif 3 <= roll <= 4:
         amount = 1
     elif 5 <= roll <= 6:
         amount = 2
@@ -250,8 +273,14 @@ def mentos_god(user, target, roll):
         results.append(f"第一次判定 → SAN已满，无法恢复")
     
     # 第二次判定：回血
-    roll2 = random.randint(1, 7)
-    if 1 <= roll2 <= 4:
+    try:
+        roll2 = interactive_roll(7, user, hint=f"曼妥思之神 第二次判定（回血）")
+    except Exception:
+        roll2 = random.randint(1, 7)
+
+    if 1 <= roll2 <= 2:
+        amount = 0  # 不恢复HP
+    elif 3 <= roll2 <= 4:
         amount = 1
     elif 5 <= roll2 <= 6:
         amount = 2
@@ -280,11 +309,37 @@ def turtle_300(user, target, roll):
         elif choice == "san":
             target._san_modifier -= 300  # 使用中间变量
         elif choice == "actions":
-            # 负行动力累积
-            target._negative_action_points = getattr(target, "_negative_action_points", 0) + 300
+            # 直接设置负行动力为300，而不是累加
+            target._negative_action_points = 300
         return f"{user.name} 强制 {target.name} {choice}-300！"
     else:
-        return f"{user.name} 出 300龟失败，骰到 {roll} → 无效"
+        return f"{user.name} 300龟（{roll}）→ 什么都没发生"
+
+def debug_card(user, target):
+    # 调试卡牌：让玩家选择下一张打出的牌的点数
+    try:
+        print(f"{user.name} 使用了调试卡牌！")
+        value = int(input("请输入下一张牌的点数（必须是整数）："))
+        # 设置一个全局变量或用户属性来存储这个值
+        user._next_roll_value = value
+        return f"{user.name} 设置了下一张牌的点数为 {value}"
+    except ValueError:
+        return f"{user.name} 调试卡牌使用失败：输入的不是有效整数"
+    except Exception as e:
+        return f"{user.name} 调试卡牌使用失败：{str(e)}"
+
+def twilight_lizard(user, target, roll):
+    if 14 <= roll <= 17:
+        target._hp_modifier -= 1  # 使用中间变量
+        return f"{user.name} 暮光巫蜥（{roll}）→ {target.name} -1 HP"
+    elif 18 <= roll <= 19:
+        target._hp_modifier -= 4  # 使用中间变量
+        return f"{user.name} 暮光巫蜥（{roll}）→ {target.name} -4 HP"
+    elif 20 <= roll <= 24:
+        target._hp_modifier -= 2  # 使用中间变量
+        return f"{user.name} 暮光巫蜥（{roll}）→ {target.name} -2 HP"
+    else:
+        return f"{user.name} 暮光巫蜥（{roll}）→ 无效点数，没有效果"
 
 # ====== 牌库原型模板（每种卡只定义一次，下面会根据 rarity 生成具体副本） ======
 deck_prototypes = [
@@ -295,7 +350,9 @@ deck_prototypes = [
     Card("慢速药", "使自己掷骰变慢", stable_effect=slow_down, rarity=40),
     Card("加速药", "使自己掷骰变快", stable_effect=speed_up, rarity=40),
     Card("曼妥思之神", "纯回血与SAN", dice_sides=7, outcomes={(1,7): mentos_god}, rarity=30),
-    Card("300龟", "骰到300可强制选择对方数值-300", dice_sides=300, outcomes={(300,300): turtle_300}, rarity=80)
+    Card("300龟", "骰到300可强制选择对方数值-300", dice_sides=300, outcomes={(300,300): turtle_300}, rarity=80),
+    Card("调试卡牌", "可设置下一张牌的点数", stable_effect=debug_card, rarity=1),
+    Card("暮光巫蜥", "14-16:扣1HP, 17-19:扣4HP, 20-24:扣2HP", dice_sides=24, outcomes={(14,16): twilight_lizard, (17,19): twilight_lizard, (20,24): twilight_lizard}, min_value=14, rarity=50)
 ]
 
 
@@ -363,10 +420,18 @@ def effect_status(player):
 
 
 # ====== 游戏主逻辑 ======
-def game_demo(deck_size=DEFAULT_DECK_SIZE):
-    # 为双方分别构建牌堆（每局不同）
-    p1 = Player("玩家A", build_deck_from_prototypes(deck_prototypes, deck_size=deck_size))
-    p2 = Player("玩家B", build_deck_from_prototypes(deck_prototypes, deck_size=deck_size))
+def game_demo(deck_size=DEFAULT_DECK_SIZE, debug_mode=False):
+    # 根据debug_mode参数决定是否包含调试卡牌
+    if debug_mode:
+        # 包含调试卡牌
+        p1 = Player("玩家A", build_deck_from_prototypes(deck_prototypes, deck_size=deck_size))
+        p2 = Player("玩家B", build_deck_from_prototypes(deck_prototypes, deck_size=deck_size))
+    else:
+        # 不包含调试卡牌
+        # 创建一个不包含调试卡牌的牌堆原型列表
+        filtered_prototypes = [card for card in deck_prototypes if card.name != "调试卡牌"]
+        p1 = Player("玩家A", build_deck_from_prototypes(filtered_prototypes, deck_size=deck_size))
+        p2 = Player("玩家B", build_deck_from_prototypes(filtered_prototypes, deck_size=deck_size))
 
     p1.draw(5)
     p2.draw(5)
@@ -429,9 +494,14 @@ def game_demo(deck_size=DEFAULT_DECK_SIZE):
 
         # 每回合行动力减去负数储存值
         if getattr(current, "_negative_action_points", 0) > 0:
+            # 计算本回合可恢复的行动力
+            recovery = max(2, current.hp // 2)
+            # 减少负行动力，但不超过恢复量
+            current._negative_action_points = max(0, current._negative_action_points - recovery)
+
             if current.actions <= 0:
                 print(f"{current.name} 行动力不足（负数效果），跳过回合")
-                current._negative_action_points = max(0, current._negative_action_points - current.actions)
+                print(f"{current.name} 恢复了 {recovery} 点负行动力，剩余 {current._negative_action_points} 点")
                 current.draw(1)
                 turn += 1
                 continue
@@ -462,12 +532,15 @@ def game_demo(deck_size=DEFAULT_DECK_SIZE):
             turn += 1
             continue
 
+        # 更新基础行动力（基于当前HP）
+        current._base_actions = max(2, current.hp // 2)
+
         # 本回合行动次数
         actions_remaining = current.actions
         
         # 当还有行动力时，可以继续出牌
         while actions_remaining > 0:
-            print(f"\n剩余行动力: {actions_remaining}")
+            print(f"\n剩余行动力: {current.actions}")
             print(f"{current.name} 手牌: {[f'{i}:{c.name}' for i,c in enumerate(current.hand)]}")
             
             # 如果没有手牌，自动抽一张并结束回合
@@ -523,19 +596,24 @@ def main_menu():
         print("\n===== 欢迎来到卡牌游戏 =====")
         print("1. 开始新游戏（默认牌堆大小 12）")
         print("2. 开始新游戏（自定义牌堆大小）")
-        print("3. 退出游戏")
-        choice = input("请选择操作 (1/2/3): ").strip()
+        print("3. 开始新游戏（开启调试卡牌）")
+        print("4. 退出游戏")
+        choice = input("请选择操作 (1/2/3/4): ").strip()
 
         if choice == "1":
-            game_demo(deck_size=DEFAULT_DECK_SIZE)
+            game_demo(deck_size=DEFAULT_DECK_SIZE, debug_mode=False)
         elif choice == "2":
             try:
                 n = int(input("输入每副牌的目标牌数（建议 8-30）: ").strip())
                 n = max(4, min(60, n))
-                game_demo(deck_size=n)
+                debug_choice = input("是否开启调试卡牌？(y/n): ").strip().lower()
+                debug_mode = debug_choice == 'y'
+                game_demo(deck_size=n, debug_mode=debug_mode)
             except ValueError:
                 print("输入无效，返回菜单。")
         elif choice == "3":
+            game_demo(deck_size=DEFAULT_DECK_SIZE, debug_mode=True)
+        elif choice == "4":
             print("退出游戏，再见！")
             sys.exit(0)
         else:
@@ -567,3 +645,10 @@ if __name__ == "__main__":
 # [更新3] 调整了更清晰的状态改变显示
 # [更新4] 新增卡牌声明时骰子最小点数的变量
 # [更新5] 新增赛前掷骰子决定先手环节
+
+# v1.3.0
+# [更新1] 修复了曼妥思之神的双重判定问题
+# [更新2] 新增了可以指定点数的调试卡牌
+# [更新3] 优化300龟,300龟可以正常实现功能
+# [更新4] 新增暮光巫蜥卡牌
+# [更新5] 优化初始界面,现在可以选择是否在牌堆中加入调试卡牌

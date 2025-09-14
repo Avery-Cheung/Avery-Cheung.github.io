@@ -1,3 +1,4 @@
+
 import random
 import threading
 import time
@@ -82,7 +83,7 @@ class Card:
         self.min_value = min_value  # 保存min_value参数
 
     def play(self, user, target):
-            
+
         # 获取原始结果
         result = None
         if self.dice_sides:
@@ -179,22 +180,22 @@ class Player:
 
     def apply_modifiers(self):
         """应用HP和SAN的修改器，更新实际值
-        
+
         此方法将中间变量(_hp_modifier和_san_modifier)的值应用到实际的hp和san属性上，
         并显示变化前后的数值对比。应用后会重置中间变量，并确保数值不超过上限。
         """
         # 记录变化前的数值
         old_hp = self.hp
         old_san = self.san
-        
+
         # 应用修改器
         self.hp += self._hp_modifier
         self.san += self._san_modifier
-        
+
         # 确保HP和SAN不超过上限
         self.hp = min(10, self.hp)
         self.san = min(10, self.san)
-        
+
         # 如果有变化，显示变化信息
         if old_hp != self.hp or old_san != self.san:
             hp_change = self.hp - old_hp
@@ -205,11 +206,11 @@ class Player:
             if san_change != 0:
                 change_info += f"SAN {old_san}→{self.san} ({san_change:+d})"
             print(change_info)
-        
+
         # 重置修改器
         self._hp_modifier = 0
         self._san_modifier = 0
-    
+
     def status(self):
         # 考虑中间变量的实际HP和SAN值
         actual_hp = self.hp + self._hp_modifier
@@ -252,7 +253,7 @@ def speed_up(user, target):
 def mentos_god(user, target, roll):
     # 两次判定：第一次回SAN，第二次回血
     results = []
-    
+
     # 第一次判定：回SAN
     if 1 <= roll <= 2:
         amount = 0  # 不恢复SAN
@@ -262,7 +263,7 @@ def mentos_god(user, target, roll):
         amount = 2
     else:  # roll == 7
         amount = 3
-    
+
     # 检查是否超过SAN上限
     current_san = user.san + user._san_modifier  # 考虑中间变量
     actual_amount = min(amount, 10 - current_san)
@@ -271,7 +272,7 @@ def mentos_god(user, target, roll):
         results.append(f"第一次判定 → 恢复 {actual_amount} SAN")
     else:
         results.append(f"第一次判定 → SAN已满，无法恢复")
-    
+
     # 第二次判定：回血
     try:
         roll2 = interactive_roll(7, user, hint=f"曼妥思之神 第二次判定（回血）")
@@ -286,7 +287,7 @@ def mentos_god(user, target, roll):
         amount = 2
     else:  # roll2 == 7
         amount = 3
-    
+
     # 检查是否超过HP上限
     current_hp = user.hp + user._hp_modifier  # 考虑中间变量
     actual_amount = min(amount, 10 - current_hp)
@@ -295,7 +296,7 @@ def mentos_god(user, target, roll):
         results.append(f"第二次判定 → 恢复 {actual_amount} HP")
     else:
         results.append(f"第二次判定 → HP已满，无法恢复")
-    
+
     return f"{user.name} 使用 曼妥思之神\n" + "\n".join(results)
 
 def turtle_300(user, target, roll):
@@ -503,6 +504,35 @@ def game_demo(deck_size=DEFAULT_DECK_SIZE, debug_mode=False):
                 print(f"{current.name} 行动力不足（负数效果），跳过回合")
                 print(f"{current.name} 恢复了 {recovery} 点负行动力，剩余 {current._negative_action_points} 点")
                 current.draw(1)
+
+                # 弃牌环节 - 行动力不足时
+                # 计算玩家最多可以保留的牌数（行动力上限，最小为2）
+                max_cards = max(2, current._base_actions)
+
+                # 如果手牌数量超过最大保留数量，进入弃牌环节
+                if len(current.hand) > max_cards:
+                    print(f"\n===== 弃牌环节 =====")
+                    print(f"{current.name} 手牌数量({len(current.hand)})超过最大保留数量({max_cards})，需要弃牌")
+
+                    # 不断弃牌直到手牌数量不超过最大保留数量
+                    while len(current.hand) > max_cards:
+                        print(f"\n{current.name} 手牌: {[f'{i}:{c.name}' for i,c in enumerate(current.hand)]}")
+                        print(f"需要弃掉 {len(current.hand) - max_cards} 张牌")
+
+                        try:
+                            choice = input(f"选择要弃掉的卡牌编号(0-{len(current.hand)-1}): ").strip()
+                            idx = int(choice)
+
+                            if 0 <= idx < len(current.hand):
+                                # 弃牌
+                                discarded_card = current.hand.pop(idx)
+                                current.discard.append(discarded_card)
+                                print(f"{current.name} 弃掉了 {discarded_card.name}")
+                            else:
+                                print("编号无效，请重新选择。")
+                        except ValueError:
+                            print("请输入数字编号。")
+
                 turn += 1
                 continue
 
@@ -529,6 +559,35 @@ def game_demo(deck_size=DEFAULT_DECK_SIZE, debug_mode=False):
             print(f"{current.name} 被迫跳过本回合（受效果影响）")
             current._skip_next_turn = False
             current.draw(1)
+
+            # 弃牌环节 - 跳过回合时
+            # 计算玩家最多可以保留的牌数（行动力上限，最小为2）
+            max_cards = max(2, current._base_actions)
+
+            # 如果手牌数量超过最大保留数量，进入弃牌环节
+            if len(current.hand) > max_cards:
+                print(f"\n===== 弃牌环节 =====")
+                print(f"{current.name} 手牌数量({len(current.hand)})超过最大保留数量({max_cards})，需要弃牌")
+
+                # 不断弃牌直到手牌数量不超过最大保留数量
+                while len(current.hand) > max_cards:
+                    print(f"\n{current.name} 手牌: {[f'{i}:{c.name}' for i,c in enumerate(current.hand)]}")
+                    print(f"需要弃掉 {len(current.hand) - max_cards} 张牌")
+
+                    try:
+                        choice = input(f"选择要弃掉的卡牌编号(0-{len(current.hand)-1}): ").strip()
+                        idx = int(choice)
+
+                        if 0 <= idx < len(current.hand):
+                            # 弃牌
+                            discarded_card = current.hand.pop(idx)
+                            current.discard.append(discarded_card)
+                            print(f"{current.name} 弃掉了 {discarded_card.name}")
+                        else:
+                            print("编号无效，请重新选择。")
+                    except ValueError:
+                        print("请输入数字编号。")
+
             turn += 1
             continue
 
@@ -537,22 +596,22 @@ def game_demo(deck_size=DEFAULT_DECK_SIZE, debug_mode=False):
 
         # 本回合行动次数
         actions_remaining = current.actions
-        
+
         # 当还有行动力时，可以继续出牌
         while actions_remaining > 0:
             print(f"\n剩余行动力: {current.actions}")
             print(f"{current.name} 手牌: {[f'{i}:{c.name}' for i,c in enumerate(current.hand)]}")
-            
+
             # 如果没有手牌，自动抽一张并结束回合
             if not current.hand:
                 print("没有手牌，自动抽一张牌")
                 current.draw(1)
                 actions_remaining = 0  # 用掉所有行动力
                 break
-                
+
             # 提供选项：出牌、结束回合或投降
             choice = input(f"选择要使用的卡牌编号(0-{len(current.hand)-1})，输入-1结束回合，输入-2投降: ").strip()
-            
+
             if choice == "-1":
                 print("选择结束回合")
                 break
@@ -561,20 +620,20 @@ def game_demo(deck_size=DEFAULT_DECK_SIZE, debug_mode=False):
                 print(f"{enemy.name} 获胜！")
                 input("按回车返回主菜单...")
                 return
-                
+
             try:
                 idx = int(choice)
                 if 0 <= idx < len(current.hand):
                     # 出牌
                     result = current.play_card(idx, enemy)
                     print(result)
-                    
+
                     # 立即应用伤害修改器，使伤害生效
                     current.apply_modifiers()
                     enemy.apply_modifiers()
-                    
+
                     actions_remaining -= 1  # 每出一张牌消耗一点行动力
-                    
+
                     # 检查胜负
                     if current.is_dead():
                         print(f"{current.name} 已死亡，{enemy.name} 获胜！")
@@ -588,9 +647,38 @@ def game_demo(deck_size=DEFAULT_DECK_SIZE, debug_mode=False):
                     print("编号无效，请重新选择。")
             except ValueError:
                 print("请输入数字编号或-1结束回合。")
-        
+
         # 回合结束抽牌（每回合抽一张）
         current.draw(1)
+
+        # 弃牌环节
+        # 计算玩家最多可以保留的牌数（行动力上限，最小为2）
+        max_cards = max(2, current._base_actions)
+
+        # 如果手牌数量超过最大保留数量，进入弃牌环节
+        if len(current.hand) > max_cards:
+            print(f"\n===== 弃牌环节 =====")
+            print(f"{current.name} 手牌数量({len(current.hand)})超过最大保留数量({max_cards})，需要弃牌")
+
+            # 不断弃牌直到手牌数量不超过最大保留数量
+            while len(current.hand) > max_cards:
+                print(f"\n{current.name} 手牌: {[f'{i}:{c.name}' for i,c in enumerate(current.hand)]}")
+                print(f"需要弃掉 {len(current.hand) - max_cards} 张牌")
+
+                try:
+                    choice = input(f"选择要弃掉的卡牌编号(0-{len(current.hand)-1}): ").strip()
+                    idx = int(choice)
+
+                    if 0 <= idx < len(current.hand):
+                        # 弃牌
+                        discarded_card = current.hand.pop(idx)
+                        current.discard.append(discarded_card)
+                        print(f"{current.name} 弃掉了 {discarded_card.name}")
+                    else:
+                        print("编号无效，请重新选择。")
+                except ValueError:
+                    print("请输入数字编号。")
+
         turn += 1
 
 
@@ -637,7 +725,7 @@ if __name__ == "__main__":
 #         并按期望值分配每种卡在牌堆中的副本数（目标牌堆大小可配置，默认为 12）
 # [更新4] 将原先的 deck_template 改为 deck_prototypes（每种卡只定义一次并包含 rarity）
 # [更新5] Player 初始化现在接收已经构建好的牌堆（每局会为双方单独构建）
-# [更新6] 在主菜单加入“自定义牌堆大小”选项，方便调试稀有度效果
+# [更新6] 在主菜单加入"自定义牌堆大小"选项，方便调试稀有度效果
 # [更新7] 保留了之前所有功能：交互闪现骰子、回合信息/效果显示、跳过回合逻辑、胜负后返回主菜单等
 # [更新8] 增加负行动力机制：出牌前减去负行动力，可以跳过多个回合
 # [更新9] 新增曼妥思之神卡牌（双判定回血/回SAN）
@@ -657,4 +745,7 @@ if __name__ == "__main__":
 # [更新3] 优化300龟,300龟可以正常实现功能
 # [更新4] 新增暮光巫蜥卡牌
 # [更新5] 优化初始界面,现在可以选择是否在牌堆中加入调试卡牌
-# [更新6] 新增投降功能
+
+# v1.3.1
+# [更新1] 新增弃牌环节，当玩家出牌回合结束或行动力不足时，玩家需要弃牌
+# [更新2] 玩家最多只能保存数值等于行动力上限张牌，最小值为2

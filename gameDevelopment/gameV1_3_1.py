@@ -45,11 +45,24 @@ def interactive_roll(sides: int, player, hint: str = None, min_value=1):
 
     def flicker():
         speed = max(0.01, getattr(player, "dice_speed", DEFAULT_DICE_SPEED))
+        # 检查是否有裘罗效果
+        has_qiu_luo = getattr(player, "_qiu_luo_effect", False)
+        # 乱码字符序列
+        garbled_chars = "!@#$%^&*?"
+        char_index = 0
+
         while not stop_event.is_set():
             speed = max(0.01, getattr(player, "dice_speed", DEFAULT_DICE_SPEED))
             n = random.randint(min_value, sides)
             result[0] = n
-            sys.stdout.write(f"\r骰子 [{min_value}-{sides}] 闪现: {n}   ")
+
+            if has_qiu_luo:
+                # 显示乱码而不是数字
+                display_char = garbled_chars[char_index % len(garbled_chars)]
+                sys.stdout.write(f"\r骰子 [{min_value}-{sides}] 闪现: {display_char}   ")
+                char_index += 1
+            else:
+                sys.stdout.write(f"\r骰子 [{min_value}-{sides}] 闪现: {n}   ")
             sys.stdout.flush()
             time.sleep(speed)
         sys.stdout.write("\r")
@@ -68,7 +81,17 @@ def interactive_roll(sides: int, player, hint: str = None, min_value=1):
     stop_event.set()
     thread.join(timeout=1.0)
     roll = result[0]
-    print(f"\n最终判定 → {roll}")
+
+    # 检查是否有裘罗效果
+    has_qiu_luo = getattr(player, "_qiu_luo_effect", False)
+    if has_qiu_luo:
+        # 显示乱码判定结果
+        print(f"\n最终判定 → !@#$%^&*?")
+        # 清除裘罗效果，使其只生效一次
+        delattr(player, "_qiu_luo_effect")
+    else:
+        print(f"\n最终判定 → {roll}")
+
     return roll
 
 # ====== Card / Player / Deck 系统 ======
@@ -101,6 +124,54 @@ class Card:
         except Exception:
             roll = random.randint(min_value, dice_sides)
 
+        # 检查是否有虚环之匣的递归效果
+        recursion_count = getattr(user, "_void_box_recursion", 0)
+
+        # 如果有递归效果且骰子在某个范围内，需要进行递归判定
+        if recursion_count > 0:
+            for rng, effect in outcomes.items():
+                if rng[0] <= roll <= rng[1]:
+                    # 在有效范围内，需要递归判定
+                    print(f"{user.name} 受到虚环之匣影响，需要再投 {recursion_count} 次骰子确认效果")
+
+                    # 记录原始结果
+                    original_roll = roll
+                    valid_rolls = 1  # 原始骰子已经算一次有效
+
+                    # 进行递归判定
+                    for i in range(recursion_count):
+                        try:
+                            recursive_roll = interactive_roll(dice_sides, user, hint=f"虚环之匣递归判定 {i+1}/{recursion_count}（范围 {min_value}-{dice_sides}）", min_value=min_value)
+                        except Exception:
+                            recursive_roll = random.randint(min_value, dice_sides)
+
+                        # 检查递归骰子是否在相同范围内
+                        if rng[0] <= recursive_roll <= rng[1]:
+                            valid_rolls += 1
+                            print(f"第 {i+1} 次递归判定: {recursive_roll} (在有效范围内 {rng[0]}-{rng[1]})")
+                        else:
+                            print(f"第 {i+1} 次递归判定: {recursive_roll} (不在有效范围内 {rng[0]}-{rng[1]})")
+
+                    # 清除递归效果
+                    delattr(user, "_void_box_recursion")
+
+                    # 如果所有递归判定都在有效范围内，才触发效果
+                    if valid_rolls > recursion_count // 2:  # 超过一半的递归判定在有效范围内
+                        print(f"递归判定通过（{valid_rolls}/{recursion_count+1}），效果生效")
+                        if callable(effect):
+                            return effect(user, target, original_roll)
+                        elif isinstance(effect, dict):
+                            return self._resolve_outcome(user, target, effect, dice_sides, min_value)
+                        else:
+                            return f"{self.name} 无效效果定义"
+                    else:
+                        return f"{self.name} 骰到 {original_roll} → 递归判定未通过（{valid_rolls}/{recursion_count+1}），效果无效"
+
+            # 如果不在任何范围内，清除递归效果并返回正常结果
+            delattr(user, "_void_box_recursion")
+            return f"{self.name} 骰到 {roll} → 没有匹配的结果（健壮处理）"
+
+        # 正常情况下的效果处理
         for rng, effect in outcomes.items():
             if rng[0] <= roll <= rng[1]:
                 if callable(effect):
@@ -342,6 +413,63 @@ def twilight_lizard(user, target, roll):
     else:
         return f"{user.name} 暮光巫蜥（{roll}）→ 无效点数，没有效果"
 
+def chicken_machine(user, target):
+    # 当前回合效果：-2san
+    user._san_modifier -= 2
+    
+    # 设置延迟效果：在四回合后开始时+5san
+    # 我们需要在玩家对象上存储这个延迟效果
+    # 使用一个列表来存储所有延迟效果，每个效果是一个元组(生效回合数, 效果函数)
+    if not hasattr(user, '_delayed_effects'):
+        user._delayed_effects = []
+    
+    # 延迟效果将在4个回合后生效（当前回合是0，下一回合是1，下下回合是2，下下下回合是3，第四回合是4）
+    # 我们存储(生效的回合数, 效果函数)
+    def add_san_effect():
+        user._san_modifier += 5
+        return f"{user.name} 的鸡机效果触发 → +5 SAN"
+    
+    # 获取当前回合数
+    current_turn = getattr(user, '_current_turn', 0)
+    user._delayed_effects.append((current_turn + 4, add_san_effect))
+    
+    return f"{user.name} 使用 鸡机 → -2 SAN，四回合后 +5 SAN"
+
+def glasses_frog_effect(user, target, roll):
+    if 1 <= roll <= 5:
+        # 看片效果：加2san
+        user._san_modifier += 2
+        return f"{user.name} 眼镜蛙（{roll}）→ 看片 +2 SAN"
+    elif 6 <= roll <= 10:
+        # 飞踢效果：扣对方两次1hp
+        target._hp_modifier -= 1
+        first_hit = f"{user.name} 眼镜蛙（{roll}）→ 飞踢 {target.name} -1 HP（第一次）"
+        target._hp_modifier -= 1
+        second_hit = f"{user.name} 眼镜蛙（{roll}）→ 飞踢 {target.name} -1 HP（第二次）"
+        return f"{first_hit}\n{second_hit}"
+    else:
+        return f"{user.name} 眼镜蛙（{roll}）→ 无效点数，没有效果"
+
+def qiu_luo_effect(user, target):
+    # 裘罗效果：让对方下一次投骰子闪现的数字变成乱码循环
+    # 在玩家对象上设置一个属性来标记这个效果
+    target._qiu_luo_effect = True
+    return f"{user.name} 使用 裘罗 → {target.name} 的下一次骰子将显示乱码"
+
+def void_box_effect(user, target, roll):
+    # 虚环之匣效果：让对方下次投骰子判定时要递归n次
+    # 根据骰子值确定递归次数
+    if roll == 1:
+        n = 0  # 不递归
+    elif 2 <= roll <= 4:
+        n = 1  # 递归一次
+    else:  # roll == 5
+        n = 2  # 递归两次
+
+    # 在玩家对象上设置递归效果属性
+    target._void_box_recursion = n
+    return f"{user.name} 使用 虚环之匣（{roll}）→ {target.name} 的下一次判定需要递归 {n} 次"
+
 # ====== 牌库原型模板（每种卡只定义一次，下面会根据 rarity 生成具体副本） ======
 deck_prototypes = [
     Card("普通攻击", "造成 1 HP", stable_effect=normal_attack, rarity=20),
@@ -353,7 +481,11 @@ deck_prototypes = [
     Card("曼妥思之神", "纯回血与SAN", dice_sides=7, outcomes={(1,7): mentos_god}, rarity=30),
     Card("300龟", "骰到300可强制选择对方数值-300", dice_sides=300, outcomes={(300,300): turtle_300}, rarity=80),
     Card("调试卡牌", "可设置下一张牌的点数", stable_effect=debug_card, rarity=1),
-    Card("暮光巫蜥", "14-16:扣1HP, 17-19:扣4HP, 20-24:扣2HP", dice_sides=24, outcomes={(14,16): twilight_lizard, (17,19): twilight_lizard, (20,24): twilight_lizard}, min_value=14, rarity=50)
+    Card("暮光巫蜥", "14-16:扣1HP, 17-19:扣4HP, 20-24:扣2HP", dice_sides=24, outcomes={(14,16): twilight_lizard, (17,19): twilight_lizard, (20,24): twilight_lizard}, min_value=14, rarity=50),
+    Card("鸡机", "当前回合-2SAN，四回合后+5SAN", stable_effect=chicken_machine, rarity=65),
+    Card("眼镜蛙", "1-5看片+2SAN, 6-10飞踢-2HP", dice_sides=10, outcomes={(1,10): glasses_frog_effect}, rarity=50),
+    Card("裘罗", "使对方下一次骰子显示乱码", stable_effect=qiu_luo_effect, rarity=80),
+    Card("虚环之匣", "使对方下次判定需要递归1-3次", dice_sides=5, outcomes={(1,5): void_box_effect}, rarity=10)
 ]
 
 
@@ -412,10 +544,52 @@ def build_deck_from_prototypes(prototypes, deck_size=DEFAULT_DECK_SIZE):
     return deck
 
 # ====== 辅助函数 ======
+def apply_delayed_effects(player, current_turn):
+    """应用所有到期的延迟效果"""
+    if not hasattr(player, '_delayed_effects'):
+        return
+    
+    # 找出所有应该在这个回合生效的效果
+    triggered_effects = []
+    remaining_effects = []
+    
+    for effect_turn, effect_func in player._delayed_effects:
+        if effect_turn <= current_turn:
+            triggered_effects.append(effect_func)
+        else:
+            remaining_effects.append((effect_turn, effect_func))
+    
+    # 更新延迟效果列表，移除已触发的
+    player._delayed_effects = remaining_effects
+    
+    # 应用所有触发的效果
+    results = []
+    for effect in triggered_effects:
+        try:
+            result = effect()
+            if result:
+                results.append(result)
+        except Exception as e:
+            results.append(f"延迟效果应用出错: {str(e)}")
+    
+    # 如果有触发的效果，打印出来
+    if results:
+        print("\n===== 延迟效果触发 =====")
+        for result in results:
+            print(result)
+        # 立即应用修改器
+        player.apply_modifiers()
+
 def effect_status(player):
     effects = []
     if getattr(player, "_skip_next_turn", False):
         effects.append("跳过下回合")
+    
+    # 显示延迟效果数量
+    delayed_count = len(getattr(player, "_delayed_effects", []))
+    if delayed_count > 0:
+        effects.append(f"延迟效果({delayed_count})")
+        
     return ", ".join(effects) if effects else "无"
 
 
@@ -492,6 +666,8 @@ def game_demo(deck_size=DEFAULT_DECK_SIZE, debug_mode=False):
         for pl in (current, enemy):
             pl._skip_next_turn = getattr(pl, "_skip_next_turn", False)
             pl._negative_action_points = getattr(pl, "_negative_action_points", 0)  # 负行动力补丁
+            pl._delayed_effects = getattr(pl, "_delayed_effects", [])  # 延迟效果列表
+            pl._current_turn = getattr(pl, "_current_turn", turn)  # 当前回合数
 
         # 每回合行动力减去负数储存值
         if getattr(current, "_negative_action_points", 0) > 0:
@@ -536,6 +712,14 @@ def game_demo(deck_size=DEFAULT_DECK_SIZE, debug_mode=False):
                 turn += 1
                 continue
 
+        # 更新当前回合数
+        current._current_turn = turn
+        enemy._current_turn = turn
+        
+        # 在回合开始时应用延迟效果
+        apply_delayed_effects(current, turn)
+        apply_delayed_effects(enemy, turn)
+        
         # --- 回合信息提示 ---
         # 计算当前回合数：两个玩家各完成一次自己的回合算一个总的回合
         # 无论谁先手，turn=0和1都是第1回合，turn=2和3都是第2回合
@@ -721,8 +905,7 @@ if __name__ == "__main__":
 # v1.2.0
 # [更新1] 在 Card 类新增参数 rarity（0-100，数值越大越稀有）
 # [更新2] 新增 Card.clone 方法，用于生成牌堆中独立实例
-# [更新3] 新增 build_deck_from_prototypes 函数：根据信赖度 (100 - rarity) 计算权重，
-#         并按期望值分配每种卡在牌堆中的副本数（目标牌堆大小可配置，默认为 12）
+# [更新3] 新增 build_deck_from_prototypes 函数：根据信赖度 (100 - rarity) 计算权重，并按期望值分配每种卡在牌堆中的副本数（目标牌堆大小可配置，默认为 12）
 # [更新4] 将原先的 deck_template 改为 deck_prototypes（每种卡只定义一次并包含 rarity）
 # [更新5] Player 初始化现在接收已经构建好的牌堆（每局会为双方单独构建）
 # [更新6] 在主菜单加入"自定义牌堆大小"选项，方便调试稀有度效果
@@ -745,7 +928,9 @@ if __name__ == "__main__":
 # [更新3] 优化300龟,300龟可以正常实现功能
 # [更新4] 新增暮光巫蜥卡牌
 # [更新5] 优化初始界面,现在可以选择是否在牌堆中加入调试卡牌
+# [更新6] 新增投降功能
 
 # v1.3.1
-# [更新1] 新增弃牌环节，当玩家出牌回合结束或行动力不足时，玩家需要弃牌
-# [更新2] 玩家最多只能保存数值等于行动力上限张牌，最小值为2
+# [更新1] 新增弃牌环节，当玩家出牌回合结束或行动力不足时，玩家需要弃牌,玩家最多只能保存数值等于行动力上限张牌，最小值为2
+# [更新2] 新增卡牌鸡机
+# [更新3] 新增卡牌眼镜蛙

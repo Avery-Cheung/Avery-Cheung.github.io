@@ -96,7 +96,7 @@ def interactive_roll(sides: int, player, hint: str = None, min_value=1):
 
 # ====== Card / Player / Deck 系统 ======
 class Card:
-    def __init__(self, name, description, dice_sides=None, outcomes=None, stable_effect=None, rarity=50, min_value=1):
+    def __init__(self, name, description, dice_sides=None, outcomes=None, stable_effect=None, rarity=50, min_value=1, subranges=None):
         self.name = name
         self.description = description
         self.dice_sides = dice_sides
@@ -104,6 +104,8 @@ class Card:
         self.stable_effect = stable_effect
         self.rarity = int(max(0, min(100, rarity)))  # 0-100，越大越稀有
         self.min_value = min_value  # 保存min_value参数
+        # 添加子区间属性，用于存储卡牌的骰子子区间信息
+        self.subranges = subranges or {}
 
     def play(self, user, target):
 
@@ -136,7 +138,29 @@ class Card:
 
                     # 记录原始结果
                     original_roll = roll
-                    valid_rolls = 1  # 原始骰子已经算一次有效
+
+                    # 获取卡牌的子区间信息
+                    subrange = None
+                    if self.subranges:
+                        # 在新的表示方法中，subranges是一个列表，每个元素是一个区间
+                        # 需要检查original_roll是否在任何一个区间内
+                        for range_tuple in self.subranges:
+                            if range_tuple[0] <= original_roll <= range_tuple[1]:
+                                subrange = range_tuple
+                                print(f"检测到子区间: {subrange[0]}-{subrange[1]}")
+                                break
+
+                    if subrange is None:
+                        # 如果没有预定义的子区间，使用整个效果范围
+                        subrange = rng
+                        print(f"未检测到子区间，使用整个效果范围: {subrange[0]}-{subrange[1]}")
+
+                    # 检查原始骰子是否在子区间内
+                    valid_rolls = 1 if subrange[0] <= original_roll <= subrange[1] else 0
+                    if valid_rolls:
+                        print(f"原始骰子 {original_roll} 在子区间 {subrange[0]}-{subrange[1]}内")
+                    else:
+                        print(f"原始骰子 {original_roll} 不在子区间 {subrange[0]}-{subrange[1]}内")
 
                     # 进行递归判定
                     for i in range(recursion_count):
@@ -145,18 +169,37 @@ class Card:
                         except Exception:
                             recursive_roll = random.randint(min_value, dice_sides)
 
-                        # 检查递归骰子是否在相同范围内
-                        if rng[0] <= recursive_roll <= rng[1]:
+                        # 检查递归骰子是否在同一个子区间内
+                        # 需要重新检查递归骰子是否在原始骰子的子区间内
+                        recursive_subrange = None
+                        if self.subranges:
+                            # 在新的表示方法中，subranges是一个列表，每个元素是一个区间
+                            # 需要检查recursive_roll是否在任何一个区间内
+                            for range_tuple in self.subranges:
+                                if range_tuple[0] <= recursive_roll <= range_tuple[1]:
+                                    recursive_subrange = range_tuple
+                                    break
+
+                        if recursive_subrange == subrange:
                             valid_rolls += 1
-                            print(f"第 {i+1} 次递归判定: {recursive_roll} (在有效范围内 {rng[0]}-{rng[1]})")
+                            print(f"第 {i+1} 次递归判定: {recursive_roll} (在同一个子区间 {subrange[0]}-{subrange[1]}内)")
                         else:
-                            print(f"第 {i+1} 次递归判定: {recursive_roll} (不在有效范围内 {rng[0]}-{rng[1]})")
+                            # 如果后续骰子与前面骰子的子区间不同，直接判定无效
+                            print(f"第 {i+1} 次递归判定: {recursive_roll} (与原始骰子的子区间 {subrange[0]}-{subrange[1]}不同)")
+                            if recursive_subrange:
+                                print(f"递归骰子在子区间 {recursive_subrange[0]}-{recursive_subrange[1]}内，与原始骰子子区间不同")
+                            else:
+                                print(f"递归骰子不在任何子区间内")
+                            # 清除递归效果
+                            delattr(user, "_void_box_recursion")
+                            return f"{self.name} 骰到 {original_roll} → 递归判定中骰子子区间不同，效果无效"
 
                     # 清除递归效果
                     delattr(user, "_void_box_recursion")
 
-                    # 如果所有递归判定都在有效范围内，才触发效果
-                    if valid_rolls > recursion_count // 2:  # 超过一半的递归判定在有效范围内
+                    # 如果超过一半的递归判定在子区间内，才触发效果
+                    # 注意：原始骰子已经算作一次有效判定，所以总判定次数是 recursion_count + 1
+                    if valid_rolls > (recursion_count + 1) / 2:  # 超过一半的总判定次数（包括原始骰子）在子区间内
                         print(f"递归判定通过（{valid_rolls}/{recursion_count+1}），效果生效")
                         if callable(effect):
                             return effect(user, target, original_roll)
@@ -191,7 +234,8 @@ class Card:
             outcomes=self.outcomes,
             stable_effect=self.stable_effect,
             rarity=self.rarity,
-            min_value=self.min_value
+            min_value=self.min_value,
+            subranges=self.subranges
         )
 
 class Player:
@@ -470,60 +514,29 @@ def void_box_effect(user, target, roll):
     target._void_box_recursion = n
     return f"{user.name} 使用 虚环之匣（{roll}）→ {target.name} 的下一次判定需要递归 {n} 次"
 
-def blood_armor_snail(user, target):
-    # 血甲蜗效果：造成已损失血量/2(向下取整)的伤害，然后投骰子，1-10，骰到10时追加上回合损失血量/3(向下取整)的伤害并扣除自己与之相同的san
-    
-    # 计算已损失血量
-    lost_hp = 10 - user.hp  # 最大HP为10
-    
-    # 计算基础伤害：已损失血量/2(向下取整)
-    base_damage = lost_hp // 2
-    target._hp_modifier -= base_damage
-    result = f"{user.name} 血甲蜗 → {target.name} -{base_damage} HP (已损失血量/2)"
-    
-    # 投骰子判定追加效果
-    try:
-        roll = interactive_roll(10, user, hint=f"血甲蜗 追加效果判定（1-10）")
-    except Exception:
-        roll = random.randint(1, 10)
-    
-    # 如果骰到10，触发追加效果
-    if roll == 10:
-        # 获取上回合损失血量
-        last_turn_lost_hp = getattr(user, "_last_turn_lost_hp", 0)
-        
-        # 计算追加伤害：上回合损失血量/3(向下取整)
-        extra_damage = last_turn_lost_hp // 3
-        target._hp_modifier -= extra_damage
-        user._san_modifier -= extra_damage
-        
-        result += f"\n追加效果（骰到{roll}）→ {target.name} -{extra_damage} HP，自身 -{extra_damage} SAN (上回合损失血量/3)"
-    else:
-        result += f"\n追加效果（骰到{roll}）→ 无追加效果"
-    
-    # 记录当前回合损失的血量，供下回合使用
-    # 注意：这里使用的是当前回合开始时的HP，而不是应用效果后的HP
-    user._last_turn_lost_hp = lost_hp
-    
-    return result
-
 # ====== 牌库原型模板（每种卡只定义一次，下面会根据 rarity 生成具体副本） ======
 deck_prototypes = [
     Card("普通攻击", "造成 1 HP", stable_effect=normal_attack, rarity=20),
-    Card("血祭猛攻", "高伤害但有风险", dice_sides=6, outcomes={(1,6): blood_attack}, rarity=60),
+    Card("血祭猛攻", "高伤害但有风险", dice_sides=6, outcomes={(1,6): blood_attack}, rarity=60,
+         subranges=[(1, 4), (5, 6)]),
 
-    Card("周末偷懒", "可能让敌人跳过回合", dice_sides=7, outcomes={(1,7): weekend}, rarity=70),
+    Card("周末偷懒", "可能让敌人跳过回合", dice_sides=7, outcomes={(1,7): weekend}, rarity=70,
+         subranges=[(1, 5), (6, 7)]),
     Card("慢速药", "使自己掷骰变慢", stable_effect=slow_down, rarity=40),
     Card("加速药", "使自己掷骰变快", stable_effect=speed_up, rarity=40),
-    Card("曼妥思之神", "纯回血与SAN", dice_sides=7, outcomes={(1,7): mentos_god}, rarity=30),
-    Card("300龟", "骰到300可强制选择对方数值-300", dice_sides=300, outcomes={(300,300): turtle_300}, rarity=80),
+    Card("曼妥思之神", "纯回血与SAN", dice_sides=7, outcomes={(1,7): mentos_god}, rarity=30,
+         subranges=[(1, 2), (3, 4), (5, 6), (7, 7)]),
+    Card("300龟", "骰到300可强制选择对方数值-300", dice_sides=300, outcomes={(300,300): turtle_300}, rarity=80,
+         subranges=[(1, 299), (300, 300)]),
     Card("调试卡牌", "可设置下一张牌的点数", stable_effect=debug_card, rarity=1),
-    Card("暮光巫蜥", "14-16:扣1HP, 17-19:扣4HP, 20-24:扣2HP", dice_sides=24, outcomes={(14,16): twilight_lizard, (17,19): twilight_lizard, (20,24): twilight_lizard}, min_value=14, rarity=50),
+    Card("暮光巫蜥", "14-16:扣1HP, 17-19:扣4HP, 20-24:扣2HP", dice_sides=24, outcomes={(14,16): twilight_lizard, (17,19): twilight_lizard, (20,24): twilight_lizard}, min_value=14, rarity=50,
+         subranges=[(14, 17), (17, 19), (20, 24)]),
     Card("鸡机", "当前回合-2SAN，四回合后+5SAN", stable_effect=chicken_machine, rarity=65),
-    Card("眼镜蛙", "1-5看片+2SAN, 6-10飞踢-2HP", dice_sides=10, outcomes={(1,10): glasses_frog_effect}, rarity=50),
+    Card("眼镜蛙", "1-5看片+2SAN, 6-10飞踢-2HP", dice_sides=10, outcomes={(1,10): glasses_frog_effect}, rarity=50,
+         subranges=[(1, 5), (6, 10)]),
     Card("裘罗", "使对方下一次骰子显示乱码", stable_effect=qiu_luo_effect, rarity=80),
-    Card("虚环之匣", "使对方下次判定需要递归1-3次", dice_sides=5, outcomes={(1,5): void_box_effect}, rarity=10),
-    Card("血甲蜗", "造成已损失血量/2的伤害，骰到10时追加上回合损失血量/3的伤害并扣除自己与之相同的san", stable_effect=blood_armor_snail, rarity=75)
+    Card("虚环之匣", "使对方下次判定需要递归1-3次", dice_sides=5, outcomes={(1,5): void_box_effect}, rarity=80,
+         subranges=[(1, 1), (2, 4), (5, 5)])
 ]
 
 
@@ -972,3 +985,11 @@ if __name__ == "__main__":
 # [更新1] 新增弃牌环节，当玩家出牌回合结束或行动力不足时，玩家需要弃牌,玩家最多只能保存数值等于行动力上限张牌，最小值为2
 # [更新2] 新增卡牌鸡机
 # [更新3] 新增卡牌眼镜蛙
+# [更新4] 新增卡牌裘罗
+# [更新5] 新增卡牌虚环之匣
+# [更新6] 卡牌类中新增子区间声明
+# bug: 回合行动力没有正常减少
+# bug: 弃牌和摸牌的顺序不对,目前是先摸牌后弃牌
+
+
+# v1.3.2
